@@ -1,1 +1,1 @@
-# shannon_entropy
+# Molecular Information Theory
