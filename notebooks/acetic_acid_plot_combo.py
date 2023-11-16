@@ -23,7 +23,7 @@ def plot_dihedral_angle(mol_name, group, angle_min, angle_max, num_points, idx_1
 
 basis = 'sto-3g'
 xc = 'B3LYP'
-num_points = 5
+num_points = 100
 
 ch3_angle = np.linspace(0.01, 120, num=num_points)
 oh_angle = np.linspace(0.01, 180, num=num_points)
