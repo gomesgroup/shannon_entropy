@@ -115,9 +115,7 @@ def adjust_bond_distance_recursive(mol_name, idx_1, idx_2, distance):
     vec = coord2 - coord1
     direction = vec / np.linalg.norm(vec)
 
-    adjust_atom_distance(atom2, direction, distance)
-
-    # push the descendants of atom 2 in the same direction
+    # push atom 2 and its descendants in the same direction
     descendant_idx = get_descendants(atom2, atom1)
     for idx in descendant_idx:
         adjust_atom_distance(mol_ob.GetAtom(idx), direction, distance)
@@ -129,6 +127,7 @@ def adjust_atom_distance(atom, direction, distance):
     new_coord = coord + direction * distance
     atom.SetVector(new_coord[0], new_coord[1], new_coord[2])
 
+# DO NOT USE YET
 def adjust_bond_angle_recursive(mol_name, idx_1, idx_2, idx_3, delta_angle):
     mol_ob = init_mol_ob(mol_name)
     
@@ -140,18 +139,17 @@ def adjust_bond_angle_recursive(mol_name, idx_1, idx_2, idx_3, delta_angle):
     coord2 = get_coord(atom2)
     coord3 = get_coord(atom3)
 
-    rotation_matrix = calculate_rotation_matrix(coord1, coord2, coord3, delta_angle)
-
-    adjust_atom_angle(atom2, rotation_matrix, coord2)
-
-    # rotate the descendants of atom 3 around the same axis
+    # rotate atom 2 and its descendants around the same axis
+    axis_normalized = calculate_axis_normalized(coord1, coord2, coord3)
+    rotation_matrix = calculate_rotation_matrix(axis_normalized, delta_angle)
+    
     descendant_idx = get_descendants(atom3, atom2)
     for idx in descendant_idx:
         adjust_atom_angle(mol_ob.GetAtom(idx), rotation_matrix, coord2)
 
     return mol_ob
 
-def calculate_rotation_matrix(coord1, coord2, coord3, delta_angle):
+def calculate_axis_normalized(coord1, coord2, coord3):
     coord21 = coord1 - coord2
     coord23 = coord3 - coord2
 
@@ -160,6 +158,10 @@ def calculate_rotation_matrix(coord1, coord2, coord3, delta_angle):
 
     axis = np.cross(coord21_normalized, coord23_normalized)
     axis_normalized = axis / np.linalg.norm(axis)
+
+    return axis_normalized
+
+def calculate_rotation_matrix(axis_normalized, delta_angle):
     delta_angle_rad = np.radians(delta_angle)  # Convert angle to radians
 
     cos_angle = np.cos(delta_angle_rad)
@@ -184,10 +186,12 @@ def adjust_atom_angle(atom, rotation_matrix, coord_pivot):
 
 def get_descendants(curr_atom, prev_atom):
     def get_descendants_helper(curr_atom, prev_atom, descendant_idx):
-        for nbr_atom in ob.OBAtomAtomIter(curr_atom):
-            if nbr_atom.GetIdx() != prev_atom.GetIdx():
-                descendant_idx.add(nbr_atom.GetIdx())
-                get_descendants_helper(nbr_atom, prev_atom, descendant_idx)
+        if curr_atom.GetIdx() not in descendant_idx:
+            descendant_idx.add(curr_atom.GetIdx())
+            for nbr_atom in ob.OBAtomAtomIter(curr_atom):
+                if nbr_atom.GetIdx() != prev_atom.GetIdx():
+                    descendant_idx.add(nbr_atom.GetIdx())
+                    get_descendants_helper(nbr_atom, prev_atom, descendant_idx)
     
     descendant_idx = set()
 
