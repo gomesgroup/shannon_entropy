@@ -127,7 +127,26 @@ def adjust_atom_distance(atom, direction, distance):
     new_coord = coord + direction * distance
     atom.SetVector(new_coord[0], new_coord[1], new_coord[2])
 
-# DO NOT USE YET
+def adjust_bond_angle_symmetric(mol_name, idx_1, idx_2, idx_3, delta_angle):
+    mol_ob = init_mol_ob(mol_name)
+    
+    atom1 = mol_ob.GetAtom(idx_1)
+    atom2 = mol_ob.GetAtom(idx_2)
+    atom3 = mol_ob.GetAtom(idx_3)
+
+    coord1 = get_coord(atom1)
+    coord2 = get_coord(atom2)
+    coord3 = get_coord(atom3)
+
+    axis_normalized = calculate_axis_normalized(coord1, coord2, coord3)
+    rotation_matrix_forward = calculate_rotation_matrix(axis_normalized, delta_angle / 2)
+    rotation_matrix_backward = calculate_rotation_matrix(axis_normalized, -delta_angle / 2)
+
+    adjust_atom_angle(atom3, rotation_matrix_forward, coord2)
+    adjust_atom_angle(atom1, rotation_matrix_backward, coord2)
+
+    return mol_ob
+
 def adjust_bond_angle_recursive(mol_name, idx_1, idx_2, idx_3, delta_angle):
     mol_ob = init_mol_ob(mol_name)
     
@@ -141,11 +160,16 @@ def adjust_bond_angle_recursive(mol_name, idx_1, idx_2, idx_3, delta_angle):
 
     # rotate atom 2 and its descendants around the same axis
     axis_normalized = calculate_axis_normalized(coord1, coord2, coord3)
-    rotation_matrix = calculate_rotation_matrix(axis_normalized, delta_angle)
+    rotation_matrix_forward = calculate_rotation_matrix(axis_normalized, delta_angle / 2)
+    rotation_matrix_backward = calculate_rotation_matrix(axis_normalized, - delta_angle / 2)
     
-    descendant_idx = get_descendants(atom3, atom2)
-    for idx in descendant_idx:
-        adjust_atom_angle(mol_ob.GetAtom(idx), rotation_matrix, coord2)
+    descendant_idx_forward = get_descendants(atom3, atom2)
+    for idx in descendant_idx_forward:
+        adjust_atom_angle(mol_ob.GetAtom(idx), rotation_matrix_forward, coord2)
+
+    descendant_idx_backward = get_descendants(atom1, atom2)
+    for idx in descendant_idx_backward:
+        adjust_atom_angle(mol_ob.GetAtom(idx), rotation_matrix_backward, coord2)
 
     return mol_ob
 
@@ -179,7 +203,7 @@ def adjust_atom_angle(atom, rotation_matrix, coord_pivot):
     coord_diff = coord_atom - coord_pivot
     coord_diff_normalized = coord_diff / np.linalg.norm(coord_diff)
 
-    coord_diff_rotated = np.dot(rotation_matrix, coord_diff_normalized) * np.linalg.norm(coord_diff_normalized)
+    coord_diff_rotated = np.dot(rotation_matrix, coord_diff_normalized) * np.linalg.norm(coord_diff)
     coord_new = coord_pivot + coord_diff_rotated
 
     atom.SetVector(coord_new[0], coord_new[1], coord_new[2])
