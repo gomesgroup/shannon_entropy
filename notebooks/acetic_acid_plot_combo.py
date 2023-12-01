@@ -1,9 +1,12 @@
 from matplotlib import pyplot as plt
 import numpy as np
-from utils.shannon import shannon_entropy
-from utils.adjust_molecule import get_dihedral_angle, adjust_dihedral_angle, convert_ob_pyscf
-from utils.adjust_molecule import init_mol_ob
 import math
+import sys
+
+sys.path.append("../utils")
+
+from shannon import shannon_entropy
+from adjust_molecule import convert_ob_pyscf, init_mol_ob
 
 basis = 'sto-3g'
 xc = 'B3LYP'
