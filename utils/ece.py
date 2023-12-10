@@ -59,21 +59,31 @@ def calculate_weights(conf_df, temp):
 
     return weights
 
-def calculate_ece(smiles, basis, xc, temp=298.15):
+def calculate_ece(smiles, basis, xc, temp):
     conf_df = generate_conf_df(smiles, basis, xc)
     weights = calculate_weights(conf_df, temp)
 
     return sum(conf_df.shannon_entropy * weights)
 
-def calculate_sum_ece(smiles_list, basis, xc):
-    total_ece = 0
+def calculate_ece_dict(smiles_list, basis, xc, temp):
+    d = {}
     for smiles in smiles_list:
-        total_ece += calculate_ece(smiles, basis, xc)
+        d[smiles] = calculate_ece(smiles, basis, xc, temp)
 
-    return total_ece
+    return d
 
-def calculate_delta_ece(reactants, products, basis, xc):
-    reactants_ece = calculate_sum_ece(reactants, basis, xc)
-    products_ece = calculate_sum_ece(products, basis, xc)
+def print_dict_stats(d, name):
+    print("-------------------- ", name, " --------------------")
+    for smiles in d:
+        print(str.format("\t{text:<30} {ece}", text=smiles, ece=d[smiles]))
+    print(str.format("\n\t{text:<30} {ece}", text="TOTAL", ece=sum(d.values())))
 
-    return products_ece - reactants_ece
+def print_rxn_stats(reactants, products, basis, xc, temp):
+    reactants_dict = calculate_ece_dict(reactants, basis, xc, temp)
+    products_dict = calculate_ece_dict(products, basis, xc, temp)
+
+    print_dict_stats(reactants_dict, "Reactants")
+    print_dict_stats(products_dict, "Products")
+
+    delta_ece = sum(products_dict.values()) - sum(reactants_dict.values())
+    print("\nDelta ECE: ", delta_ece)
