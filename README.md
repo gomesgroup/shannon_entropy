@@ -21,6 +21,18 @@ Shannon entropy is calculated with respect to a distribution.  So how do we trea
 $$ H=-\int_{\vec{r}}p(\vec{r})\ \ln p(\vec{r})\ d\vec{r} $$
 
 ### 2) Information of molecular structure provides a description of electron distribution
+We can track how the information of H<sub>2</sub> changes as we vary the bond length:![H2 plot](https://github.com/gomesgroup/shannon_entropy/blob/main/img/h2.png)
+
+The minimum and maximum correspond to the maximum compression and spread of electron density, respectively.  We can confirm this by observing the correspondences between maximum spread of electron density and the equilibrium angle of CH<sub>4</sub>: 
+
+<br />
+
+![CH4 plot](https://github.com/gomesgroup/shannon_entropy/blob/main/img/ch4.png)
+
 
 
 ### 3) Information scales logarithmically with resolution
+
+An interesting observation: as we vary the resolution of the electron density grid, the information content grows logarithmically.  This is observed across multiple molecules:
+
+![resolution plot](https://github.com/gomesgroup/shannon_entropy/blob/main/img/resolution.png)
