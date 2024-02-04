@@ -4,4 +4,11 @@ test.ipynb
 out.cube
 nohup.out
 recursive.xyz
-Untitled-1.ipynb
+Untitled-*.ipynb
+.venv
+wandb
+deprecated
+chembl
+qm9
+.conda
+coper_plots.ipynb
