@@ -31,7 +31,7 @@ We can track how the information of H<sub>2</sub> changes as we vary the bond le
 
 ![H2 plot](https://github.com/gomesgroup/shannon_entropy/blob/main/img/h2.png)
 
-The minimum and maximum correspond to the maximum compression and spread of electron density, respectively.  We can confirm this by observing the correspondences between maximum spread of electron density and the equilibrium angle of CH<sub>4</sub>: 
+The minimum and maximum correspond to the maximum compression and spread of electron density, respectively.  We can confirm this by observing the correspondence between the maximum spread of electron density and the equilibrium angle of CH<sub>4</sub>: 
 
 <br />
 
