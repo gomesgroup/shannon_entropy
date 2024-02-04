@@ -25,7 +25,11 @@ $$ H=-\int_{\vec{r}}p(\vec{r})\ \ln p(\vec{r})\ d\vec{r} $$
 <br />
 
 ### 2) Information of molecular structure provides a description of electron distribution
-We can track how the information of H<sub>2</sub> changes as we vary the bond length:![H2 plot](https://github.com/gomesgroup/shannon_entropy/blob/main/img/h2.png)
+We can track how the information of H<sub>2</sub> changes as we vary the bond length:
+
+<br />
+
+![H2 plot](https://github.com/gomesgroup/shannon_entropy/blob/main/img/h2.png)
 
 The minimum and maximum correspond to the maximum compression and spread of electron density, respectively.  We can confirm this by observing the correspondences between maximum spread of electron density and the equilibrium angle of CH<sub>4</sub>: 
 
