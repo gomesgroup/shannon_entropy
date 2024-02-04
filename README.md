@@ -8,9 +8,9 @@ Our aim is to use information theory to better understand molecular structure.
 ## What's information theory?
 Imagine you wake up and you know exactly what's going to happen in your day.  Since there's no uncertainty, then your day has no information.  But if you wake up and you have no idea what's going to happen, then your day contains a lot of information.
 
-Information theory quantifies information as the amount of uncertainty.  We can calculate this through Shannon entropy:
+Information theory quantifies information as the amount of uncertainty.  We can calculate this through <ins>Shannon entropy</ins>:
 
-$$ H = -\sum_{x}p(x)\ \log p(x) $$
+$$ H(p) = -\sum_{x}p(x)\ \log p(x) $$
 
 [Information theory](https://en.wikipedia.org/wiki/Information_theory) was developed by Claude Shannon in the 1940s.  Today, technologies like the Internet, telecommunication, and CDs would not have been possible without information theory.
 
