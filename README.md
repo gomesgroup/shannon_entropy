@@ -16,9 +16,13 @@ $$ H(p) = -\sum_{x}p(x)\ \log p(x) $$
 
 ## What have you found so far?
 ### 1) Calculate Shannon entropy (information content) of molecular structure
-Shannon entropy is calculated with respect to a distribution.  So how do we treat conformers as a distribution?  Use their electron density.
+The information content of molecular structure can be quantified using Shannon entropy.  But Shannon entropy is calculated with respect to a distribution.  So how do we treat conformers as a distribution?  Use their electron density.
+
+<br />
 
 $$ H=-\int_{\vec{r}}p(\vec{r})\ \ln p(\vec{r})\ d\vec{r} $$
+
+<br />
 
 ### 2) Information of molecular structure provides a description of electron distribution
 We can track how the information of H<sub>2</sub> changes as we vary the bond length:![H2 plot](https://github.com/gomesgroup/shannon_entropy/blob/main/img/h2.png)
