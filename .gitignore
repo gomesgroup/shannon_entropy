@@ -12,3 +12,6 @@ chembl
 qm9
 .conda
 coper_plots.ipynb
+*.xyz
+*.inp
+*.out
