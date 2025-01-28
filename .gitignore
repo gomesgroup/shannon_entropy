@@ -15,3 +15,7 @@ coper_plots.ipynb
 *.xyz
 *.inp
 *.out
+*.tmp
+reactions/
+reactions_old/
+nohup/

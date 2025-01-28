@@ -1,18 +1,18 @@
 from pyscf import gto
-import numpy as np
+import jax.numpy as jnp
 import math
 from openbabel import openbabel as ob
 
-def init_mol_ob(mol_name):
+def init_mol_ob(mol_path):
     obConversion = ob.OBConversion()
     obConversion.SetInFormat("mol")
     mol_ob = ob.OBMol()
-    obConversion.ReadFile(mol_ob, str.format("mol/{name}.mol", name=mol_name))
+    obConversion.ReadFile(mol_ob, mol_path)
 
     return mol_ob
 
-def get_bond_length(mol_name, idx_1, idx_2):
-    mol_ob = init_mol_ob(mol_name)
+def get_bond_length(mol_path, idx_1, idx_2):
+    mol_ob = init_mol_ob(mol_path)
 
     atom1 = mol_ob.GetAtom(idx_1)
     atom2 = mol_ob.GetAtom(idx_2)
@@ -21,8 +21,8 @@ def get_bond_length(mol_name, idx_1, idx_2):
 
     return distance
 
-def get_bond_angle(mol_name, idx_1, idx_2, idx_3):
-    mol_ob = init_mol_ob(mol_name)
+def get_bond_angle(mol_path, idx_1, idx_2, idx_3):
+    mol_ob = init_mol_ob(mol_path)
 
     atom1 = mol_ob.GetAtom(idx_1)
     atom2 = mol_ob.GetAtom(idx_2)
@@ -32,8 +32,8 @@ def get_bond_angle(mol_name, idx_1, idx_2, idx_3):
 
     return bond_angle
 
-def get_dihedral_angle(mol_name, idx_1, idx_2, idx_3, idx_4):
-    mol_ob = init_mol_ob(mol_name)
+def get_dihedral_angle(mol_path, idx_1, idx_2, idx_3, idx_4):
+    mol_ob = init_mol_ob(mol_path)
 
     atom1 = mol_ob.GetAtom(idx_1)
     atom2 = mol_ob.GetAtom(idx_2)
@@ -44,11 +44,11 @@ def get_dihedral_angle(mol_name, idx_1, idx_2, idx_3, idx_4):
 
     return dihedral_angle
 
-def adjust_bond_length(mol_name, idx_1, idx_2, length):
-    eqb_length = get_bond_length(mol_name, idx_1, idx_2)
+def adjust_bond_length(mol_path, idx_1, idx_2, length):
+    eqb_length = get_bond_length(mol_path, idx_1, idx_2)
     delta_length = length - eqb_length
     
-    mol_ob = init_mol_ob(mol_name)
+    mol_ob = init_mol_ob(mol_path)
     
     atom1 = mol_ob.GetAtom(idx_1)
     atom2 = mol_ob.GetAtom(idx_2)
@@ -56,7 +56,7 @@ def adjust_bond_length(mol_name, idx_1, idx_2, length):
     coord1 = get_coord(atom1)
     coord2 = get_coord(atom2)
     vec = coord2 - coord1
-    direction = vec / np.linalg.norm(vec)
+    direction = vec / jnp.linalg.norm(vec)
 
     # push atom 2 and its descendants in the same direction
     descendant_idx_forward = get_descendants(atom2, atom1)
@@ -69,11 +69,11 @@ def adjust_bond_length(mol_name, idx_1, idx_2, length):
 
     return mol_ob
 
-def adjust_bond_angle(mol_name, idx_1, idx_2, idx_3, angle):
-    eqb_angle = get_bond_angle(mol_name, idx_1, idx_2, idx_3)
+def adjust_bond_angle(mol_path, idx_1, idx_2, idx_3, angle):
+    eqb_angle = get_bond_angle(mol_path, idx_1, idx_2, idx_3)
     delta_angle = angle - eqb_angle
 
-    mol_ob = init_mol_ob(mol_name)
+    mol_ob = init_mol_ob(mol_path)
     
     atom1 = mol_ob.GetAtom(idx_1)
     atom2 = mol_ob.GetAtom(idx_2)
@@ -98,15 +98,15 @@ def adjust_bond_angle(mol_name, idx_1, idx_2, idx_3, angle):
 
     return mol_ob
 
-def adjust_dihedral_angle(mol_name, idx_1, idx_2, idx_3, idx_4, dihedral_angle):
-    mol_ob = init_mol_ob(mol_name)
+def adjust_dihedral_angle(mol_path, idx_1, idx_2, idx_3, idx_4, dihedral_angle):
+    mol_ob = init_mol_ob(mol_path)
 
     mol_ob.SetTorsion(idx_1, idx_2, idx_3, idx_4, math.radians(dihedral_angle))
 
     return mol_ob
 
 def adjust_atom_distance(atom, direction, distance):
-    coord = np.array([atom.GetX(), atom.GetY(), atom.GetZ()])
+    coord = jnp.array([atom.GetX(), atom.GetY(), atom.GetZ()])
     new_coord = coord + direction * distance
     atom.SetVector(new_coord[0], new_coord[1], new_coord[2])
 
@@ -114,33 +114,33 @@ def calculate_axis_normalized(coord1, coord2, coord3):
     coord21 = coord1 - coord2
     coord23 = coord3 - coord2
 
-    coord21_normalized = coord21 / np.linalg.norm(coord21)
-    coord23_normalized = coord23 / np.linalg.norm(coord23)
+    coord21_normalized = coord21 / jnp.linalg.norm(coord21)
+    coord23_normalized = coord23 / jnp.linalg.norm(coord23)
 
-    axis = np.cross(coord21_normalized, coord23_normalized)
-    axis_normalized = axis / np.linalg.norm(axis)
+    axis = jnp.cross(coord21_normalized, coord23_normalized)
+    axis_normalized = axis / jnp.linalg.norm(axis)
 
     return axis_normalized
 
 def calculate_rotation_matrix(axis_normalized, delta_angle):
-    delta_angle_rad = np.radians(delta_angle)  # Convert angle to radians
+    delta_angle_rad = jnp.radians(delta_angle)  # Convert angle to radians
 
-    cos_angle = np.cos(delta_angle_rad)
-    sin_angle = np.sin(delta_angle_rad)
-    K = np.array([[0, -axis_normalized[2], axis_normalized[1]],
+    cos_angle = jnp.cos(delta_angle_rad)
+    sin_angle = jnp.sin(delta_angle_rad)
+    K = jnp.array([[0, -axis_normalized[2], axis_normalized[1]],
                 [axis_normalized[2], 0, -axis_normalized[0]],
                 [-axis_normalized[1], axis_normalized[0], 0]])
     
-    rotation_matrix = np.eye(3) + sin_angle * K + (1 - cos_angle) * np.dot(K, K)
+    rotation_matrix = jnp.eye(3) + sin_angle * K + (1 - cos_angle) * jnp.dot(K, K)
 
     return rotation_matrix
 
 def adjust_atom_angle(atom, rotation_matrix, coord_pivot):
     coord_atom = get_coord(atom)
     coord_diff = coord_atom - coord_pivot
-    coord_diff_normalized = coord_diff / np.linalg.norm(coord_diff)
+    coord_diff_normalized = coord_diff / jnp.linalg.norm(coord_diff)
 
-    coord_diff_rotated = np.dot(rotation_matrix, coord_diff_normalized) * np.linalg.norm(coord_diff)
+    coord_diff_rotated = jnp.dot(rotation_matrix, coord_diff_normalized) * jnp.linalg.norm(coord_diff)
     coord_new = coord_pivot + coord_diff_rotated
 
     atom.SetVector(coord_new[0], coord_new[1], coord_new[2])
@@ -161,4 +161,4 @@ def get_descendants(curr_atom, prev_atom):
     return descendant_idx
 
 def get_coord(atom):
-    return np.array([atom.GetX(), atom.GetY(), atom.GetZ()])
+    return jnp.array([atom.GetX(), atom.GetY(), atom.GetZ()])
