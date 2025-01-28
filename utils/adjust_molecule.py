@@ -143,7 +143,11 @@ def adjust_atom_angle(atom, rotation_matrix, coord_pivot):
     coord_diff_rotated = jnp.dot(rotation_matrix, coord_diff_normalized) * jnp.linalg.norm(coord_diff)
     coord_new = coord_pivot + coord_diff_rotated
 
-    atom.SetVector(coord_new[0], coord_new[1], coord_new[2])
+    # Convert JAX array values to regular Python floats
+    x = float(coord_new[0])
+    y = float(coord_new[1])
+    z = float(coord_new[2])
+    atom.SetVector(x, y, z)
 
 def get_descendants(curr_atom, prev_atom):
     def get_descendants_helper(curr_atom, prev_atom, descendant_idx):

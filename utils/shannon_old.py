@@ -9,13 +9,17 @@ from pyscf.tools import cubegen as cpu_cubegen
 from pyscf.dft import numint
 from pyscf import lib
 from pyscf import df
+import jax
 import jax.numpy as jnp
-from jax import jit
+from jax import jit, vmap, pmap, lax
+# Enable double precision
+jax.config.update('jax_enable_x64', True)
 import struct
 import os
 import numpy as np
 import cupy as cp
 from pyscf.tools.cubegen import Cube
+from functools import partial
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'  # Use GPU 3 which has more free memory
 from gpu4pyscf.dft import rks
@@ -33,120 +37,206 @@ def run_dft_cpu(input, basis, xc):
 
     return mf, energy
 
-def run_dft_gpu(input, basis, xc):
+def run_dft(input, basis, xc):
     mol = convert_pyscf(input, basis)
-    mf = rks.RKS(mol)
+    mf = pyscf.dft.RKS(mol)
     mf.xc = xc
     energy = mf.kernel()
 
     return mf, energy
 
+def compute_density_cpu(mf, mol, l):
+    density = mf.make_rdm1()
+    return density
+
 def gather_cube_cpu(density, mol, l):
     cube = cpu_cubegen.density(mol, "out.cube", density, nx=l, ny=l, nz=l)
     return cube
 
+def compute_density_gpu(mf, mol, l):
+    density = mf.make_rdm1()
+    return density
+
+@partial(jit, static_argnums=(2,))
+def process_batch(coords_batch, dm, mol):
+    """JIT-compiled function to process a batch of coordinates"""
+    ao = jnp.asarray(mol.eval_gto('GTOval', coords_batch))
+    return eval_rho_jax(ao, dm)
+
+@jit
+def eval_rho_jax(ao, dm):
+    """Optimized JAX GPU-accelerated version of eval_rho"""
+    return jnp.einsum('pi,ij,pj->p', ao, dm, ao, optimize='optimal')
+
+@partial(jit, static_argnums=(1,))
+def compute_density_batch(batch_data, mol):
+    """Compute density for multiple batches in parallel"""
+    coords, dm = batch_data
+    return process_batch(coords, dm, mol)
+
+class CubeGPU(Cube):
+    """Optimized JAX GPU-accelerated version of the Cube class"""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._coords_gpu = None
+        self._batch_size = 32000  # Optimized batch size
+        
+    def _cartesian_prod(self, xs, ys, zs):
+        """JAX-compatible cartesian product"""
+        xs = jnp.asarray(xs)
+        ys = jnp.asarray(ys)
+        zs = jnp.asarray(zs)
+        
+        xs_grid = jnp.repeat(xs[:, None, None], ys.shape[0], axis=1)
+        xs_grid = jnp.repeat(xs_grid, zs.shape[0], axis=2)
+        
+        ys_grid = jnp.repeat(ys[None, :, None], xs.shape[0], axis=0)
+        ys_grid = jnp.repeat(ys_grid, zs.shape[0], axis=2)
+        
+        zs_grid = jnp.repeat(zs[None, None, :], xs.shape[0], axis=0)
+        zs_grid = jnp.repeat(zs_grid, ys.shape[0], axis=1)
+        
+        return jnp.stack([
+            xs_grid.reshape(-1),
+            ys_grid.reshape(-1),
+            zs_grid.reshape(-1)
+        ], axis=1)
+        
+    @partial(jit, static_argnums=(0,))
+    def _compute_coords(self, xs, ys, zs, box, origin):
+        """JIT-compiled coordinate computation"""
+        frac_coords = self._cartesian_prod(xs, ys, zs)
+        return frac_coords @ box + origin
+        
+    def get_coords(self):
+        """Get coordinates using optimized JAX GPU acceleration"""
+        if self._coords_gpu is None:
+            # Convert all inputs to JAX arrays
+            xs = jnp.asarray(self.xs)
+            ys = jnp.asarray(self.ys)
+            zs = jnp.asarray(self.zs)
+            box = jnp.asarray(self.box)
+            origin = jnp.asarray(self.boxorig)
+            
+            # Compute coordinates using JIT-compiled function
+            self._coords_gpu = self._compute_coords(xs, ys, zs, box, origin)
+        return self._coords_gpu
+
+    def write(self, field, fname, comment=None):
+        """Optimized cube file writing"""
+        if isinstance(field, jnp.ndarray):
+            field = np.array(field)
+        super().write(field, fname, comment)
+
+@jit
+def process_single_point(coord, dm):
+    """Process a single coordinate point"""
+    ao = jnp.asarray(mol.eval_gto('GTOval', coord[None]))
+    return eval_rho_jax(ao, dm)
+
 def gather_cube_gpu(density, mol, l):
-    """JAX GPU-accelerated version of cube generation"""
+    """Highly optimized JAX GPU-accelerated cube generation"""
     from pyscf.pbc.gto import Cell
     
     # Initialize cube with GPU acceleration
     cc = CubeGPU(mol, l, l, l, RESOLUTION, BOX_MARGIN)
 
-    GTOval = 'GTOval'
-    if isinstance(mol, Cell):
-        GTOval = 'PBC' + GTOval
-
-    # Get coordinates from pre-allocated GPU memory
+    # Get coordinates and convert density matrix to JAX array
     coords = cc.get_coords()
     ngrids = cc.get_ngrids()
     
-    # Optimize batch size for GPU memory and occupancy
-    blksize = min(32000, ngrids)  # Increased batch size
-    
-    # Convert density matrix to JAX array
     if hasattr(density, 'asnumpy'):
         dm_gpu = jnp.asarray(density.asnumpy())
     elif hasattr(density, 'get'):
         dm_gpu = jnp.asarray(density.get())
     else:
         dm_gpu = jnp.asarray(density)
-    
-    # Pre-allocate output array
-    rho = jnp.zeros(ngrids)
-    
-    # Process in batches
-    for ip0 in range(0, ngrids, blksize):
-        ip1 = min(ip0 + blksize, ngrids)
-        
-        # Convert coordinates back to CPU for eval_gto
-        coords_batch = np.array(coords[ip0:ip1])
-        
-        # Evaluate AO and convert to JAX array
-        ao = jnp.asarray(mol.eval_gto(GTOval, coords_batch))
-        
-        # Compute density for this batch using JIT-compiled function
-        rho = rho.at[ip0:ip1].set(eval_rho_jax(ao, dm_gpu))
-    
-    # Reshape result
-    rho = rho.reshape((cc.nx, cc.ny, cc.nz))
 
-    # Write out density to the .cube file
-    # cc.write(rho, "out.cube", comment='Electron density in real space (e/Bohr^3)')
+    # Process in chunks to avoid memory issues
+    chunk_size = 8000
+    n_chunks = (ngrids + chunk_size - 1) // chunk_size
+    rho = np.zeros(ngrids)
+
+    for i in range(n_chunks):
+        start_idx = i * chunk_size
+        end_idx = min((i + 1) * chunk_size, ngrids)
+        
+        # Process chunk
+        coords_chunk = np.array(coords[start_idx:end_idx])
+        ao = jnp.asarray(mol.eval_gto('GTOval', coords_chunk))
+        rho_chunk = eval_rho_jax(ao, dm_gpu)
+        
+        # Store results
+        rho[start_idx:end_idx] = np.array(rho_chunk)
+
+    # Convert final result to JAX array and reshape
+    rho = jnp.asarray(rho).reshape((cc.nx, cc.ny, cc.nz))
+    
+    # Write output
+    cc.write(rho, "out.cube", comment='Electron density in real space (e/Bohr^3)')
     return np.array(rho)
 
+@jit
 def compute_coper(cube, l):
-    """Compute COPER using JAX for GPU acceleration"""
+    """Optimized COPER computation using JAX"""
     cube = jnp.asarray(cube)
-    z = jnp.sum(cube)    # partition function
-    cube = cube / z      # normalize densities
-    entropy = -jnp.sum(cube * jnp.log(cube))   
-    coper = jnp.exp(entropy - (3 * jnp.log(l)))
-    return float(coper)
+    z = jnp.sum(cube)
+    cube = cube / z
+    # Use where to handle log(0) cases
+    log_cube = jnp.where(cube > 0, jnp.log(cube), 0.0)
+    entropy = -jnp.sum(jnp.where(cube > 0, cube * log_cube, 0.0))
+    coper = jnp.exp(entropy - (3 * jnp.log(jnp.array(l, dtype=jnp.float64))))
+    return jnp.array(coper, dtype=jnp.float64)
 
 def calc_coper_cpu(input, basis, xc, l):
     mol = convert_pyscf(input, basis)
 
-    mf, energy = run_dft_cpu(mol, basis, xc)
+    mf = pyscf.dft.RKS(mol)
+    mf.xc = xc
+    energy = mf.kernel()
+
     density = mf.make_rdm1()
     cube = cpu_cubegen.density(mol, "out.cube", density, nx=l, ny=l, nz=l)
 
-    coper = compute_coper(cube, l)
+    z = np.sum(cube)    # partition function
+    cube = cube / z      # normalize densities
+    entropy = -np.sum(cube * np.log(cube))   
+
+    coper = np.exp(entropy - (3 * np.log(l)))
 
     return coper, energy
 
-def calc_coper_gpu(input, basis, xc, l):
+def calc_coper(input, basis, xc, l):
     mol = convert_pyscf(input, basis)
 
-    mf, energy = run_dft_gpu(mol, basis, xc)
+    mf = rks.RKS(mol)
+    mf.xc = xc
+    energy = mf.kernel()
+
+    # Get density matrix
     density = mf.make_rdm1()
+    
+    # Generate cube using GPU acceleration
     cube = gather_cube_gpu(density, mol, l)
-    coper = compute_coper(cube, l)
+    
+    # Calculate COPER using JAX
+    coper = float(compute_coper(cube, l))
 
     return coper, energy
 
-def calc_entropy_cpu(input, basis, xc, l):
+def calc_entropy(input, basis, xc, l):
     mol = convert_pyscf(input, basis)
 
-    mf, energy = run_dft_cpu(mol, basis, xc)
+    mf = rks.RKS(mol)
+    mf.xc = xc
+    energy = mf.kernel()
+
     density = mf.make_rdm1()
-    cube = gather_cube_cpu(density, mol, l)
+    cube = cpu_cubegen.density(mol, "out.cube", density, nx=l, ny=l, nz=l)
 
     z = jnp.sum(cube)    # partition function
     cube = cube / z      # normalize densities
     entropy = -jnp.sum(cube * jnp.log(cube))   
-
-    return entropy
-
-def calc_entropy_gpu(input, basis, xc, l):
-    mol = convert_pyscf(input, basis)
-
-    mf, energy = run_dft_gpu(mol, basis, xc)
-    density = mf.make_rdm1()
-    cube = gather_cube_gpu(density, mol, l)
-
-    z = jnp.sum(cube)    # partition function
-    cube = cube / z      # normalize densities
-    entropy = -jnp.sum(cube * jnp.log(cube)) 
 
     return entropy
 
@@ -212,33 +302,6 @@ def rdkit_2_pyscf(rdkit_mol, basis):
 
     return pyscf_mol
 
-class CubeGPU(Cube):
-    """JAX GPU-accelerated version of the Cube class for density calculations"""
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Pre-allocate GPU memory for frequently used arrays
-        self._coords_gpu = None
-        
-    def get_coords(self):
-        """Get coordinates using JAX GPU acceleration with memory reuse"""
-        if self._coords_gpu is None:
-            frac_coords = jnp.asarray(lib.cartesian_prod([self.xs, self.ys, self.zs]))
-            box_gpu = jnp.asarray(self.box)
-            origin_gpu = jnp.asarray(self.boxorig)
-            self._coords_gpu = frac_coords @ box_gpu + origin_gpu
-        return self._coords_gpu
-
-    def write(self, field, fname, comment=None):
-        """Write cube file with optimized GPU to CPU transfer"""
-        if isinstance(field, jnp.ndarray):
-            field = np.array(field)
-        super().write(field, fname, comment)
-
-@jit
-def eval_rho_jax(ao, dm):
-    """JAX GPU-accelerated version of eval_rho"""
-    return jnp.einsum('pi,ij,pj->p', ao, dm, ao)
-
 def density_gpu(mol, outfile, dm, nx=80, ny=80, nz=80, resolution=RESOLUTION, margin=BOX_MARGIN):
     """GPU-accelerated version of density calculation"""
     from pyscf.pbc.gto import Cell
@@ -263,7 +326,7 @@ def density_gpu(mol, outfile, dm, nx=80, ny=80, nz=80, resolution=RESOLUTION, ma
     rho = rho.reshape(cc.nx, cc.ny, cc.nz)
 
     # Write out density to the .cube file
-    # cc.write(rho, outfile, comment='Electron density in real space (e/Bohr^3)')
+    cc.write(rho, outfile, comment='Electron density in real space (e/Bohr^3)')
     return jnp.asnumpy(rho)
 
 def orbital_gpu(mol, outfile, coeff, nx=80, ny=80, nz=80, resolution=RESOLUTION, margin=BOX_MARGIN):
@@ -334,44 +397,46 @@ if __name__ == "__main__":
     test_smiles = "CC(=O)O"  # Acetic acid
     mol = smiles_2_pyscf(test_smiles, basis)
     
-    # Benchmark CPU version
-    print("\nCPU Version Breakdown:")
-    start_cpu = time.time()
+    # # Benchmark CPU version
+    # print("\nCPU Version Breakdown:")
+    # start_cpu = time.time()
     
-    start_dft = time.time()
-    mf_cpu, energy_cpu = run_dft_cpu(mol, basis, xc)
-    dft_time = time.time() - start_dft
-    print(f"DFT calculation: {dft_time:.3f} seconds")
+    # start_dft = time.time()
+    # mf_cpu, energy_cpu = run_dft_cpu(mol, basis, xc)
+    # dft_time = time.time() - start_dft
+    # print(f"DFT calculation: {dft_time:.3f} seconds")
     
-    density_cpu = mf_cpu.make_rdm1()
+    # start_density = time.time()
+    # density_cpu = compute_density_cpu(mf_cpu, mol, l)
+    # density_time = time.time() - start_density
+    # print(f"Density calculation: {density_time:.3f} seconds")
     
-    start_cube = time.time()
-    cube_cpu = gather_cube_cpu(density_cpu, mol, l) 
-    cube_time = time.time() - start_cube
-    print(f"Cube generation: {cube_time:.3f} seconds")
+    # start_cube = time.time()
+    # cube_cpu = gather_cube_cpu(density_cpu, mol, l) 
+    # cube_time = time.time() - start_cube
+    # print(f"Cube generation: {cube_time:.3f} seconds")
     
-    start_coper = time.time()
-    coper_cpu = compute_coper(cube_cpu, l)
-    coper_time = time.time() - start_coper
-    print(f"COPER calculation: {coper_time:.3f} seconds")
+    # start_coper = time.time()
+    # coper_cpu = compute_coper(cube_cpu, l)
+    # coper_time = time.time() - start_coper
+    # print(f"COPER calculation: {coper_time:.3f} seconds")
     
-    cpu_time = time.time() - start_cpu
-    print(f"Total CPU time: {cpu_time:.3f} seconds\n")
+    # cpu_time = time.time() - start_cpu
+    # print(f"Total CPU time: {cpu_time:.3f} seconds\n")
     
-    # Test molecule
-    test_smiles = "CC(=O)O"  # Acetic acid
-    mol = smiles_2_pyscf(test_smiles, basis)
-
     # Benchmark GPU version
     print("GPU Version Breakdown:") 
     start_gpu = time.time()
     
     start_dft = time.time()
-    mf_gpu, energy_gpu = run_dft_gpu(mol, basis, xc)
+    mf_gpu, energy_gpu = run_dft(mol, basis, xc)
     dft_time = time.time() - start_dft
     print(f"DFT calculation: {dft_time:.3f} seconds")
     
-    density_gpu = mf_gpu.make_rdm1()
+    start_density = time.time()
+    density_gpu = compute_density_gpu(mf_gpu, mol, l)
+    density_time = time.time() - start_density
+    print(f"Density calculation: {density_time:.3f} seconds")
     
     start_cube = time.time()
     cube_gpu = gather_cube_gpu(density_gpu, mol, l)
@@ -394,8 +459,6 @@ if __name__ == "__main__":
     
     # Verify results match
     print("Validation:")
-    print("COPER CPU: ", coper_cpu)
-    print("COPER GPU: ", coper_gpu)
     if abs(coper_cpu - coper_gpu) < 1e-6:
         print("COPER values match within tolerance")
     else:

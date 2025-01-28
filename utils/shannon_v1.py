@@ -33,17 +33,25 @@ def run_dft_cpu(input, basis, xc):
 
     return mf, energy
 
-def run_dft_gpu(input, basis, xc):
+def run_dft(input, basis, xc):
     mol = convert_pyscf(input, basis)
-    mf = rks.RKS(mol)
+    mf = pyscf.dft.RKS(mol)
     mf.xc = xc
     energy = mf.kernel()
 
     return mf, energy
 
+def compute_density_cpu(mf, mol, l):
+    density = mf.make_rdm1()
+    return density
+
 def gather_cube_cpu(density, mol, l):
     cube = cpu_cubegen.density(mol, "out.cube", density, nx=l, ny=l, nz=l)
     return cube
+
+def compute_density_gpu(mf, mol, l):
+    density = mf.make_rdm1()
+    return density
 
 def gather_cube_gpu(density, mol, l):
     """JAX GPU-accelerated version of cube generation"""
@@ -61,7 +69,7 @@ def gather_cube_gpu(density, mol, l):
     ngrids = cc.get_ngrids()
     
     # Optimize batch size for GPU memory and occupancy
-    blksize = min(32000, ngrids)  # Increased batch size
+    blksize = min(32000, ngrids)  # Back to original larger batch size
     
     # Convert density matrix to JAX array
     if hasattr(density, 'asnumpy'):
@@ -78,7 +86,7 @@ def gather_cube_gpu(density, mol, l):
     for ip0 in range(0, ngrids, blksize):
         ip1 = min(ip0 + blksize, ngrids)
         
-        # Convert coordinates back to CPU for eval_gto
+        # Convert coordinates to numpy - this actually helps PySCF's eval_gto
         coords_batch = np.array(coords[ip0:ip1])
         
         # Evaluate AO and convert to JAX array
@@ -106,47 +114,56 @@ def compute_coper(cube, l):
 def calc_coper_cpu(input, basis, xc, l):
     mol = convert_pyscf(input, basis)
 
-    mf, energy = run_dft_cpu(mol, basis, xc)
+    mf = pyscf.dft.RKS(mol)
+    mf.xc = xc
+    energy = mf.kernel()
+
     density = mf.make_rdm1()
     cube = cpu_cubegen.density(mol, "out.cube", density, nx=l, ny=l, nz=l)
 
-    coper = compute_coper(cube, l)
+    z = np.sum(cube)    # partition function
+    cube = cube / z      # normalize densities
+    entropy = -np.sum(cube * np.log(cube))   
+
+    coper = np.exp(entropy - (3 * np.log(l)))
 
     return coper, energy
 
-def calc_coper_gpu(input, basis, xc, l):
+def calc_coper(input, basis, xc, l):
     mol = convert_pyscf(input, basis)
 
-    mf, energy = run_dft_gpu(mol, basis, xc)
+    mf = rks.RKS(mol)
+    mf.xc = xc
+    energy = mf.kernel()
+
+    # Get density matrix
     density = mf.make_rdm1()
+    
+    # Generate cube using GPU acceleration
     cube = gather_cube_gpu(density, mol, l)
-    coper = compute_coper(cube, l)
+    
+    # Calculate COPER using JAX
+    cube_jax = jnp.asarray(cube)
+    z = jnp.sum(cube_jax)    # partition function
+    cube_jax = cube_jax / z      # normalize densities
+    entropy = -jnp.sum(cube_jax * jnp.log(cube_jax))   
+    coper = jnp.exp(entropy - (3 * jnp.log(l)))
 
-    return coper, energy
+    return float(coper), energy
 
-def calc_entropy_cpu(input, basis, xc, l):
+def calc_entropy(input, basis, xc, l):
     mol = convert_pyscf(input, basis)
 
-    mf, energy = run_dft_cpu(mol, basis, xc)
+    mf = rks.RKS(mol)
+    mf.xc = xc
+    energy = mf.kernel()
+
     density = mf.make_rdm1()
-    cube = gather_cube_cpu(density, mol, l)
+    cube = cpu_cubegen.density(mol, "out.cube", density, nx=l, ny=l, nz=l)
 
     z = jnp.sum(cube)    # partition function
     cube = cube / z      # normalize densities
     entropy = -jnp.sum(cube * jnp.log(cube))   
-
-    return entropy
-
-def calc_entropy_gpu(input, basis, xc, l):
-    mol = convert_pyscf(input, basis)
-
-    mf, energy = run_dft_gpu(mol, basis, xc)
-    density = mf.make_rdm1()
-    cube = gather_cube_gpu(density, mol, l)
-
-    z = jnp.sum(cube)    # partition function
-    cube = cube / z      # normalize densities
-    entropy = -jnp.sum(cube * jnp.log(cube)) 
 
     return entropy
 
@@ -263,7 +280,7 @@ def density_gpu(mol, outfile, dm, nx=80, ny=80, nz=80, resolution=RESOLUTION, ma
     rho = rho.reshape(cc.nx, cc.ny, cc.nz)
 
     # Write out density to the .cube file
-    # cc.write(rho, outfile, comment='Electron density in real space (e/Bohr^3)')
+    cc.write(rho, outfile, comment='Electron density in real space (e/Bohr^3)')
     return jnp.asnumpy(rho)
 
 def orbital_gpu(mol, outfile, coeff, nx=80, ny=80, nz=80, resolution=RESOLUTION, margin=BOX_MARGIN):
@@ -334,44 +351,46 @@ if __name__ == "__main__":
     test_smiles = "CC(=O)O"  # Acetic acid
     mol = smiles_2_pyscf(test_smiles, basis)
     
-    # Benchmark CPU version
-    print("\nCPU Version Breakdown:")
-    start_cpu = time.time()
+    # # Benchmark CPU version
+    # print("\nCPU Version Breakdown:")
+    # start_cpu = time.time()
     
-    start_dft = time.time()
-    mf_cpu, energy_cpu = run_dft_cpu(mol, basis, xc)
-    dft_time = time.time() - start_dft
-    print(f"DFT calculation: {dft_time:.3f} seconds")
+    # start_dft = time.time()
+    # mf_cpu, energy_cpu = run_dft_cpu(mol, basis, xc)
+    # dft_time = time.time() - start_dft
+    # print(f"DFT calculation: {dft_time:.3f} seconds")
     
-    density_cpu = mf_cpu.make_rdm1()
+    # start_density = time.time()
+    # density_cpu = compute_density_cpu(mf_cpu, mol, l)
+    # density_time = time.time() - start_density
+    # print(f"Density calculation: {density_time:.3f} seconds")
     
-    start_cube = time.time()
-    cube_cpu = gather_cube_cpu(density_cpu, mol, l) 
-    cube_time = time.time() - start_cube
-    print(f"Cube generation: {cube_time:.3f} seconds")
+    # start_cube = time.time()
+    # cube_cpu = gather_cube_cpu(density_cpu, mol, l) 
+    # cube_time = time.time() - start_cube
+    # print(f"Cube generation: {cube_time:.3f} seconds")
     
-    start_coper = time.time()
-    coper_cpu = compute_coper(cube_cpu, l)
-    coper_time = time.time() - start_coper
-    print(f"COPER calculation: {coper_time:.3f} seconds")
+    # start_coper = time.time()
+    # coper_cpu = compute_coper(cube_cpu, l)
+    # coper_time = time.time() - start_coper
+    # print(f"COPER calculation: {coper_time:.3f} seconds")
     
-    cpu_time = time.time() - start_cpu
-    print(f"Total CPU time: {cpu_time:.3f} seconds\n")
+    # cpu_time = time.time() - start_cpu
+    # print(f"Total CPU time: {cpu_time:.3f} seconds\n")
     
-    # Test molecule
-    test_smiles = "CC(=O)O"  # Acetic acid
-    mol = smiles_2_pyscf(test_smiles, basis)
-
     # Benchmark GPU version
     print("GPU Version Breakdown:") 
     start_gpu = time.time()
     
     start_dft = time.time()
-    mf_gpu, energy_gpu = run_dft_gpu(mol, basis, xc)
+    mf_gpu, energy_gpu = run_dft(mol, basis, xc)
     dft_time = time.time() - start_dft
     print(f"DFT calculation: {dft_time:.3f} seconds")
     
-    density_gpu = mf_gpu.make_rdm1()
+    start_density = time.time()
+    density_gpu = compute_density_gpu(mf_gpu, mol, l)
+    density_time = time.time() - start_density
+    print(f"Density calculation: {density_time:.3f} seconds")
     
     start_cube = time.time()
     cube_gpu = gather_cube_gpu(density_gpu, mol, l)
@@ -394,8 +413,6 @@ if __name__ == "__main__":
     
     # Verify results match
     print("Validation:")
-    print("COPER CPU: ", coper_cpu)
-    print("COPER GPU: ", coper_gpu)
     if abs(coper_cpu - coper_gpu) < 1e-6:
         print("COPER values match within tolerance")
     else:

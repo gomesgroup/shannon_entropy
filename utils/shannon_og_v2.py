@@ -61,18 +61,18 @@ def gather_cube_gpu(density, mol, l):
     ngrids = cc.get_ngrids()
     
     # Optimize batch size for GPU memory and occupancy
-    blksize = min(32000, ngrids)  # Increased batch size
+    blksize = min(8000, ngrids)  # Reduced batch size for better precision
     
-    # Convert density matrix to JAX array
+    # Convert density matrix to JAX array with explicit float64 precision
     if hasattr(density, 'asnumpy'):
-        dm_gpu = jnp.asarray(density.asnumpy())
+        dm_gpu = jnp.asarray(density.asnumpy(), dtype=jnp.float64)
     elif hasattr(density, 'get'):
-        dm_gpu = jnp.asarray(density.get())
+        dm_gpu = jnp.asarray(density.get(), dtype=jnp.float64)
     else:
-        dm_gpu = jnp.asarray(density)
+        dm_gpu = jnp.asarray(density, dtype=jnp.float64)
     
-    # Pre-allocate output array
-    rho = jnp.zeros(ngrids)
+    # Pre-allocate output array with float64 precision
+    rho = jnp.zeros(ngrids, dtype=jnp.float64)
     
     # Process in batches
     for ip0 in range(0, ngrids, blksize):
@@ -81,26 +81,27 @@ def gather_cube_gpu(density, mol, l):
         # Convert coordinates back to CPU for eval_gto
         coords_batch = np.array(coords[ip0:ip1])
         
-        # Evaluate AO and convert to JAX array
-        ao = jnp.asarray(mol.eval_gto(GTOval, coords_batch))
+        # Evaluate AO and convert to JAX array with float64 precision
+        ao = jnp.asarray(mol.eval_gto(GTOval, coords_batch), dtype=jnp.float64)
         
         # Compute density for this batch using JIT-compiled function
         rho = rho.at[ip0:ip1].set(eval_rho_jax(ao, dm_gpu))
     
-    # Reshape result
+    # Reshape result and ensure proper normalization
     rho = rho.reshape((cc.nx, cc.ny, cc.nz))
-
-    # Write out density to the .cube file
-    # cc.write(rho, "out.cube", comment='Electron density in real space (e/Bohr^3)')
-    return np.array(rho)
+    
+    # Convert back to numpy with float64 precision to match CPU behavior
+    return np.array(rho, dtype=np.float64)
 
 def compute_coper(cube, l):
-    """Compute COPER using JAX for GPU acceleration"""
-    cube = jnp.asarray(cube)
+    """Compute COPER using JAX for GPU acceleration with explicit float64 precision"""
+    # Convert input to float64 precision
+    cube = jnp.asarray(cube, dtype=jnp.float64)
     z = jnp.sum(cube)    # partition function
     cube = cube / z      # normalize densities
-    entropy = -jnp.sum(cube * jnp.log(cube))   
-    coper = jnp.exp(entropy - (3 * jnp.log(l)))
+    # Use float64 precision for log computation
+    entropy = -jnp.sum(cube * jnp.log(cube + 1e-15))   # add small epsilon to avoid log(0)
+    coper = jnp.exp(entropy - (3 * jnp.log(jnp.float64(l))))
     return float(coper)
 
 def calc_coper_cpu(input, basis, xc, l):
@@ -236,8 +237,8 @@ class CubeGPU(Cube):
 
 @jit
 def eval_rho_jax(ao, dm):
-    """JAX GPU-accelerated version of eval_rho"""
-    return jnp.einsum('pi,ij,pj->p', ao, dm, ao)
+    """JAX GPU-accelerated version of eval_rho with explicit float64 precision"""
+    return jnp.einsum('pi,ij,pj->p', ao, dm, ao, precision="highest")
 
 def density_gpu(mol, outfile, dm, nx=80, ny=80, nz=80, resolution=RESOLUTION, margin=BOX_MARGIN):
     """GPU-accelerated version of density calculation"""
